@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head><title>Generate Icons</title></head>
+<body>
+<p>Right-click each image below and "Save image as..." to save the icons.</p>
+<h3>icon-192.png</h3>
+<canvas id="c192" width="192" height="192"></canvas>
+<h3>icon-512.png</h3>
+<canvas id="c512" width="512" height="512"></canvas>
+<script>
+function drawIcon(canvas) {
+  const ctx = canvas.getContext("2d");
+  const s = canvas.width;
+  // Background
+  ctx.fillStyle = "#87CEEB";
+  ctx.beginPath();
+  ctx.roundRect(0, 0, s, s, s * 0.2);
+  ctx.fill();
+  // Player body
+  ctx.fillStyle = "#DC3232";
+  const bx = s * 0.3, by = s * 0.22, bw = s * 0.4, bh = s * 0.52;
+  ctx.beginPath();
+  ctx.roundRect(bx, by, bw, bh, s * 0.04);
+  ctx.fill();
+  // Eyes
+  ctx.fillStyle = "white";
+  ctx.fillRect(bx + bw * 0.18, by + bh * 0.18, bw * 0.22, bh * 0.2);
+  ctx.fillRect(bx + bw * 0.58, by + bh * 0.18, bw * 0.22, bh * 0.2);
+  // Pupils
+  ctx.fillStyle = "#222";
+  ctx.fillRect(bx + bw * 0.24, by + bh * 0.22, bw * 0.13, bh * 0.14);
+  ctx.fillRect(bx + bw * 0.64, by + bh * 0.22, bw * 0.13, bh * 0.14);
+  // Ground
+  ctx.fillStyle = "#64B446";
+  ctx.fillRect(0, s * 0.8, s, s * 0.2);
+  // Coin
+  ctx.save();
+  ctx.translate(s * 0.78, s * 0.35);
+  ctx.rotate(Math.PI / 4);
+  ctx.fillStyle = "#FFD700";
+  ctx.fillRect(-s * 0.05, -s * 0.05, s * 0.1, s * 0.1);
+  ctx.restore();
+}
+drawIcon(document.getElementById("c192"));
+drawIcon(document.getElementById("c512"));
+
+// Auto-download
+["c192", "c512"].forEach(id => {
+  const canvas = document.getElementById(id);
+  const link = document.createElement("a");
+  link.download = id === "c192" ? "icon-192.png" : "icon-512.png";
+  link.href = canvas.toDataURL("image/png");
+  link.click();
+});
+</script>
+</body>
+</html>

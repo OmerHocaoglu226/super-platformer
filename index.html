@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#87CEEB" />
+  <meta name="description" content="Super Platformer - A fun platformer game with 3 levels, power-ups, and a boss fight!" />
+  <title>Super Platformer</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%2387CEEB'/><rect x='30' y='25' width='40' height='50' rx='4' fill='%23DC3232'/><rect x='38' y='35' width='8' height='10' rx='2' fill='white'/><rect x='54' y='35' width='8' height='10' rx='2' fill='white'/><rect x='40' y='37' width='5' height='7' rx='1' fill='%23222'/><rect x='56' y='37' width='5' height='7' rx='1' fill='%23222'/></svg>" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body, html {
+      width: 100%; height: 100%; overflow: hidden;
+      touch-action: none;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    /* Mobile touch controls overlay */
+    #touch-controls {
+      display: none;
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      height: 160px;
+      z-index: 9999;
+      pointer-events: none;
+    }
+    #touch-controls.active { display: flex; justify-content: space-between; align-items: flex-end; padding: 0 16px 20px; }
+    .touch-btn {
+      pointer-events: all;
+      width: 70px; height: 70px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+      border: 2px solid rgba(255,255,255,0.4);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 28px;
+      color: rgba(255,255,255,0.8);
+      -webkit-tap-highlight-color: transparent;
+      transition: background 0.1s;
+    }
+    .touch-btn:active, .touch-btn.pressed { background: rgba(255,255,255,0.45); }
+    .dpad { display: flex; gap: 8px; align-items: flex-end; }
+    .action-btns { display: flex; gap: 12px; align-items: flex-end; }
+    .touch-btn.jump-btn { width: 90px; height: 90px; font-size: 32px; }
+  </style>
+</head>
+<body>
+  <!-- Touch controls for mobile -->
+  <div id="touch-controls">
+    <div class="dpad">
+      <button class="touch-btn" id="btn-left">◀</button>
+      <button class="touch-btn" id="btn-right">▶</button>
+    </div>
+    <div class="action-btns">
+      <button class="touch-btn jump-btn" id="btn-jump">▲</button>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/kaboom@3000.1.17/dist/kaboom.js"></script>
+  <script>
+// ════════════════════════════════════════════════════════
+// MOBILE DETECTION & TOUCH CONTROLS
+// ════════════════════════════════════════════════════════
+const isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+  || (navigator.maxTouchPoints > 0 && window.innerWidth < 1024);
+
+const touchState = { left: false, right: false, jumpPressed: false };
+
+if (isMobile) {
+  document.getElementById("touch-controls").classList.add("active");
+
+  function setupBtn(id, onDown, onUp) {
+    const btn = document.getElementById(id);
+    btn.addEventListener("touchstart", (e) => { e.preventDefault(); btn.classList.add("pressed"); onDown(); }, { passive: false });
+    btn.addEventListener("touchend",   (e) => { e.preventDefault(); btn.classList.remove("pressed"); onUp(); }, { passive: false });
+    btn.addEventListener("touchcancel",(e) => { e.preventDefault(); btn.classList.remove("pressed"); onUp(); }, { passive: false });
+  }
+
+  setupBtn("btn-left",  () => { touchState.left = true; },  () => { touchState.left = false; });
+  setupBtn("btn-right", () => { touchState.right = true; }, () => { touchState.right = false; });
+  setupBtn("btn-jump",  () => { touchState.jumpPressed = true; }, () => { touchState.jumpPressed = false; });
+}
+
+// ════════════════════════════════════════════════════════
+// INIT
+// ════════════════════════════════════════════════════════
+kaboom({
+  width: window.innerWidth,
+  height: window.innerHeight,
+  background: [135, 206, 235],
+  stretch: true,
+  letterbox: false,
+});
+
+// ════════════════════════════════════════════════════════
+// CONSTANTS
+// ════════════════════════════════════════════════════════
+const MOVE_SPEED       = 400;
+const JUMP_FORCE       = 800;
+const GRAVITY_STRENGTH = 1600;
+const FALL_DEATH_Y     = 1200;
+const GROUND_Y         = 550;
+const MAX_JUMPS        = 2;
+const ENEMY_SPEED      = 80;
+const PLAYER_MAX_LIVES = 3;
+const INVINCIBLE_TIME  = 1.5;
+const POWERUP_DURATION = 6;
+
+setGravity(GRAVITY_STRENGTH);
+
+let highScore   = 0;
+let currentLevel = 1;
+
+// ════════════════════════════════════════════════════════
+// SOUND ENGINE (Web Audio API – no files needed)
+// ════════════════════════════════════════════════════════
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+function playSound(type) {
+  try {
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    const t = audioCtx.currentTime;
+
+    switch(type) {
+      case "jump":
+        osc.type = "square";
+        osc.frequency.setValueAtTime(300, t);
+        osc.frequency.exponentialRampToValueAtTime(600, t + 0.1);
+        gain.gain.setValueAtTime(0.12, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+        osc.start(t); osc.stop(t + 0.15);
+        break;
+      case "coin":
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(880, t);
+        osc.frequency.exponentialRampToValueAtTime(1760, t + 0.08);
+        gain.gain.setValueAtTime(0.15, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+        osc.start(t); osc.stop(t + 0.15);
+        break;
+      case "stomp":
+        osc.type = "sawtooth";
+        osc.frequency.setValueAtTime(200, t);
+        osc.frequency.exponentialRampToValueAtTime(80, t + 0.15);
+        gain.gain.setValueAtTime(0.2, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+        osc.start(t); osc.stop(t + 0.2);
+        break;
+      case "hurt":
+        osc.type = "sawtooth";
+        osc.frequency.setValueAtTime(400, t);
+        osc.frequency.exponentialRampToValueAtTime(100, t + 0.3);
+        gain.gain.setValueAtTime(0.2, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+        osc.start(t); osc.stop(t + 0.35);
+        break;
+      case "death":
+        osc.type = "square";
+        osc.frequency.setValueAtTime(300, t);
+        osc.frequency.exponentialRampToValueAtTime(50, t + 0.6);
+        gain.gain.setValueAtTime(0.2, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.7);
+        osc.start(t); osc.stop(t + 0.7);
+        break;
+      case "powerup":
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(400, t);
+        osc.frequency.exponentialRampToValueAtTime(1200, t + 0.2);
+        gain.gain.setValueAtTime(0.15, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+        osc.start(t); osc.stop(t + 0.3);
+        break;
+      case "win":
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(523, t);
+        gain.gain.setValueAtTime(0.15, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.8);
+        osc.start(t); osc.stop(t + 0.8);
+        const osc2 = audioCtx.createOscillator();
+        const g2 = audioCtx.createGain();
+        osc2.connect(g2); g2.connect(audioCtx.destination);
+        osc2.type = "sine";
+        osc2.frequency.setValueAtTime(659, t + 0.15);
+        g2.gain.setValueAtTime(0.15, t + 0.15);
+        g2.gain.exponentialRampToValueAtTime(0.001, t + 0.9);
+        osc2.start(t + 0.15); osc2.stop(t + 0.9);
+        const osc3 = audioCtx.createOscillator();
+        const g3 = audioCtx.createGain();
+        osc3.connect(g3); g3.connect(audioCtx.destination);
+        osc3.type = "sine";
+        osc3.frequency.setValueAtTime(784, t + 0.3);
+        g3.gain.setValueAtTime(0.15, t + 0.3);
+        g3.gain.exponentialRampToValueAtTime(0.001, t + 1.1);
+        osc3.start(t + 0.3); osc3.stop(t + 1.1);
+        break;
+      case "spring":
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(200, t);
+        osc.frequency.exponentialRampToValueAtTime(900, t + 0.15);
+        gain.gain.setValueAtTime(0.18, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+        osc.start(t); osc.stop(t + 0.2);
+        break;
+      case "break":
+        osc.type = "triangle";
+        osc.frequency.setValueAtTime(150, t);
+        osc.frequency.exponentialRampToValueAtTime(50, t + 0.2);
+        gain.gain.setValueAtTime(0.2, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+        osc.start(t); osc.stop(t + 0.25);
+        break;
+    }
+  } catch(e) {}
+}
+
+// ════════════════════════════════════════════════════════
+// HELPERS
+// ════════════════════════════════════════════════════════
+
+function addPlatform(x, y, w, h) {
+  add([ rect(w, h), pos(x, y), color(100, 180, 70), outline(2, rgb(60, 120, 40)), area(), body({ isStatic: true }), "platform" ]);
+}
+
+function addMovingPlatform(x, y, w, h, distX, spd) {
+  add([ rect(w, h), pos(x, y), color(80, 160, 200), outline(2, rgb(40, 120, 170)), area(), body({ isStatic: true }), "platform", "movingPlatform", { startX: x, distX, speed: spd, dir: 1 } ]);
+}
+
+function addBreakablePlatform(x, y, w, h) {
+  add([ rect(w, h), pos(x, y), color(180, 140, 80), outline(2, rgb(140, 100, 50)), area(), body({ isStatic: true }), "platform", "breakable", { breakTimer: -1 } ]);
+}
+
+function addSpring(x, y) {
+  add([ rect(32, 12), pos(x, y), color(255, 100, 50), outline(2, rgb(200, 60, 20)), area(), body({ isStatic: true }), anchor("bot"), "spring" ]);
+  add([ rect(20, 16), pos(x + 6, y - 20), color(255, 150, 50), outline(1, rgb(200, 100, 30)), z(1) ]);
+}
+
+function addSpike(x, y) {
+  for (let i = 0; i < 3; i++) {
+    add([ rect(6, 20), pos(x + i * 12, y - 20), color(200, 50, 50), outline(1, rgb(150, 30, 30)), z(1) ]);
+  }
+  add([ rect(36, 18), pos(x - 2, y - 18), area(), opacity(0), "spike" ]);
+}
+
+function addCoin(x, y) {
+  add([ rect(18, 18), pos(x, y), anchor("center"), color(255, 215, 0), outline(2, rgb(200, 160, 0)), area(), rotate(45), "coin", { bobOffset: rand(0, Math.PI * 2) } ]);
+}
+
+function addEnemy(x, y, patrolDist) {
+  add([ rect(32, 32), pos(x, y), anchor("bot"), color(180, 40, 180), outline(2, rgb(120, 20, 120)), area(), body({ isStatic: true }), "enemy", "groundEnemy", { startX: x, patrolDist, dir: 1, speed: ENEMY_SPEED } ]);
+}
+
+function addFlyingEnemy(x, y, patrolDist) {
+  add([ rect(28, 28), pos(x, y), anchor("center"), color(200, 80, 40), outline(2, rgb(160, 50, 20)), area(), "enemy", "flyingEnemy", { startX: x, startY: y, patrolDist, dir: 1, speed: ENEMY_SPEED * 0.8, bobTime: rand(0, 6) } ]);
+}
+
+function addBoss(x, y) {
+  add([ rect(64, 64), pos(x, y), anchor("bot"), color(120, 20, 20), outline(3, rgb(80, 10, 10)), area(), body({ isStatic: true }), "enemy", "boss", { startX: x, patrolDist: 120, dir: 1, speed: ENEMY_SPEED * 0.5, hp: 3 } ]);
+}
+
+function addPowerup(x, y, type) {
+  const colors = { speed: [50, 150, 255], shield: [50, 220, 100], magnet: [255, 220, 50] };
+  const outlines = { speed: rgb(30, 100, 200), shield: rgb(30, 160, 60), magnet: rgb(200, 170, 20) };
+  add([ rect(24, 24, { radius: 6 }), pos(x, y), anchor("center"), color(...colors[type]), outline(2, outlines[type]), area(), "powerup", { ptype: type, bobOffset: rand(0, Math.PI * 2) } ]);
+}
+
+function spawnCoinParticles(p) {
+  for (let i = 0; i < 8; i++) add([ rect(6, 6), pos(p.x, p.y), anchor("center"), color(255, rand(180, 255), 0), opacity(1), move(rad2deg((Math.PI * 2 / 8) * i), rand(80, 180)), lifespan(0.5, { fade: 0.3 }) ]);
+}
+
+function spawnEnemyDeathParticles(p, c) {
+  for (let i = 0; i < 10; i++) add([ rect(6, 6), pos(p.x, p.y), anchor("center"), color(c[0], c[1], c[2]), opacity(1), move(rad2deg((Math.PI * 2 / 10) * i), rand(80, 200)), lifespan(0.5, { fade: 0.3 }) ]);
+}
+
+function spawnDeathParticles(p) {
+  for (let i = 0; i < 12; i++) add([ rect(8, 8), pos(p.x, p.y), anchor("center"), color(220, 50, 50), opacity(1), move(rad2deg((Math.PI * 2 / 12) * i), rand(100, 250)), lifespan(0.7, { fade: 0.4 }) ]);
+}
+
+function spawnBreakParticles(px, py, w) {
+  for (let i = 0; i < 8; i++) add([ rect(rand(6, 14), rand(6, 14)), pos(px + rand(0, w), py), anchor("center"), color(180, 140, 80), opacity(1), move(rand(200, 340), rand(60, 180)), lifespan(0.6, { fade: 0.3 }) ]);
+}
+
+function spawnPowerupParticles(p, c) {
+  for (let i = 0; i < 8; i++) add([ rect(5, 5), pos(p.x, p.y), anchor("center"), color(c[0], c[1], c[2]), opacity(1), move(rad2deg((Math.PI * 2 / 8) * i), rand(60, 140)), lifespan(0.4, { fade: 0.2 }) ]);
+}
+
+function addCloud(x, y, s) {
+  [{ dx: 0, dy: 0, w: 60*s, h: 30*s }, { dx: -20*s, dy: -10*s, w: 40*s, h: 24*s }, { dx: 25*s, dy: -8*s, w: 44*s, h: 26*s }].forEach((c) => {
+    add([ rect(c.w, c.h, { radius: c.h / 2 }), pos(x + c.dx, y + c.dy), anchor("center"), color(255, 255, 255), opacity(0.7), z(-10), "cloud", { speed: rand(8, 20) } ]);
+  });
+}
+
+function addDecoGrass(x, y) {
+  for (let i = 0; i < 3; i++) add([ rect(3, rand(6, 14)), pos(x + i * 6 - 6, y), anchor("bot"), color(60 + rand(0, 40), 160 + rand(0, 40), 30), z(1) ]);
+}
+
+function addMountain(x, h, c) {
+  add([ rect(200, h), pos(x, GROUND_Y + 48 - h), color(c[0], c[1], c[2]), opacity(0.35), z(-20), "mountain" ]);
+}
+
+function addWater(level) {
+  const waterY = GROUND_Y + 100;
+  const isLava = level === 3;
+  const c = isLava ? [220, 60, 20] : [30, 100, 200];
+  for (let x = -200; x < 3200; x += 60) add([ rect(62, 500), pos(x, waterY), color(c[0], c[1], c[2]), opacity(isLava ? 0.7 : 0.5), z(-5), "water", { startY: waterY, bobOff: rand(0, Math.PI * 2), isLava } ]);
+}
+
+// ════════════════════════════════════════════════════════
+// LEVEL DATA
+// ════════════════════════════════════════════════════════
+function getLevelData(level) {
+  const L = {};
+  if (level === 1) {
+    L.bgColor = [135, 206, 235];
+    L.ground = [[0, 300], [350, 350], [750, 350], [1150, 350], [1550, 350], [1950, 600]];
+    L.platforms = [[480, GROUND_Y-100, 144],[200, GROUND_Y-200, 144],[700, GROUND_Y-180, 144],[950, GROUND_Y-120, 144],[1200, GROUND_Y-200, 144],[1500, GROUND_Y-140, 144],[1750, GROUND_Y-200, 144],[2000, GROUND_Y-160, 144],[2250, GROUND_Y-250, 144]];
+    L.movingPlatforms = [[600, GROUND_Y-280, 120, 150, 60],[1350, GROUND_Y-260, 120, 120, 80]];
+    L.breakables = [[2100, GROUND_Y-140, 100]];
+    L.springs = [[900, GROUND_Y]];
+    L.spikes = [[1300, GROUND_Y]];
+    L.coins = [[150,GROUND_Y-40],[450,GROUND_Y-40],[500,GROUND_Y-40],[850,GROUND_Y-40],[900,GROUND_Y-40],[1250,GROUND_Y-40],[1650,GROUND_Y-40],[2050,GROUND_Y-40],[2100,GROUND_Y-40],[550,GROUND_Y-130],[270,GROUND_Y-230],[770,GROUND_Y-210],[1020,GROUND_Y-150],[1270,GROUND_Y-230],[1570,GROUND_Y-170],[1820,GROUND_Y-230],[2070,GROUND_Y-190],[2320,GROUND_Y-280],[660,GROUND_Y-320],[1410,GROUND_Y-300]];
+    L.enemies = [[500,GROUND_Y,80],[850,GROUND_Y,100],[1250,GROUND_Y,120],[1650,GROUND_Y,90],[2100,GROUND_Y,100]];
+    L.flyingEnemies = [[700, GROUND_Y-260, 80]];
+    L.boss = null;
+    L.powerups = [[270, GROUND_Y-260, "speed"],[1820, GROUND_Y-260, "shield"]];
+    L.flagX = 2480;
+    L.mountains = [[100,180,[100,140,100]],[500,250,[80,120,80]],[1000,200,[90,130,90]],[1600,280,[85,125,85]],[2100,220,[95,135,95]]];
+  } else if (level === 2) {
+    L.bgColor = [200, 160, 100];
+    L.ground = [[0,250],[320,200],[580,250],[900,300],[1280,200],[1550,350],[1960,500]];
+    L.platforms = [[250,GROUND_Y-120,120],[500,GROUND_Y-200,120],[750,GROUND_Y-160,120],[1000,GROUND_Y-240,130],[1250,GROUND_Y-140,120],[1500,GROUND_Y-200,130],[1750,GROUND_Y-260,120],[2000,GROUND_Y-180,130],[2200,GROUND_Y-300,120],[2400,GROUND_Y-200,140]];
+    L.movingPlatforms = [[400,GROUND_Y-300,110,130,70],[1100,GROUND_Y-300,110,150,90],[1850,GROUND_Y-340,100,100,80]];
+    L.breakables = [[600,GROUND_Y-120,90],[1700,GROUND_Y-160,90]];
+    L.springs = [[800,GROUND_Y],[1600,GROUND_Y]];
+    L.spikes = [[450,GROUND_Y],[1100,GROUND_Y],[2050,GROUND_Y]];
+    L.coins = [[100,GROUND_Y-40],[380,GROUND_Y-40],[650,GROUND_Y-40],[950,GROUND_Y-40],[1350,GROUND_Y-40],[1700,GROUND_Y-40],[2050,GROUND_Y-40],[2200,GROUND_Y-40],[310,GROUND_Y-150],[560,GROUND_Y-230],[810,GROUND_Y-190],[1060,GROUND_Y-270],[1310,GROUND_Y-170],[1560,GROUND_Y-230],[1810,GROUND_Y-290],[2060,GROUND_Y-210],[2260,GROUND_Y-330],[460,GROUND_Y-340],[1160,GROUND_Y-340],[1910,GROUND_Y-380],[2460,GROUND_Y-240]];
+    L.enemies = [[400,GROUND_Y,90],[700,GROUND_Y,100],[1100,GROUND_Y,130],[1500,GROUND_Y,100],[1900,GROUND_Y,110],[2200,GROUND_Y,80]];
+    L.flyingEnemies = [[500,GROUND_Y-280,90],[1300,GROUND_Y-300,80]];
+    L.boss = null;
+    L.powerups = [[560,GROUND_Y-260,"magnet"],[1560,GROUND_Y-260,"speed"],[2200,GROUND_Y-340,"shield"]];
+    L.flagX = 2550;
+    L.mountains = [[50,200,[140,120,80]],[400,300,[130,110,70]],[900,240,[150,130,90]],[1400,320,[135,115,75]],[2000,260,[145,125,85]]];
+  } else if (level === 3) {
+    L.bgColor = [60, 40, 60];
+    L.ground = [[0,200],[280,150],[500,200],[780,250],[1100,180],[1360,200],[1640,250],[1960,150],[2180,300],[2560,500]];
+    L.platforms = [[200,GROUND_Y-130,110],[430,GROUND_Y-220,110],[680,GROUND_Y-160,110],[900,GROUND_Y-260,120],[1150,GROUND_Y-180,110],[1380,GROUND_Y-240,120],[1600,GROUND_Y-300,110],[1850,GROUND_Y-200,110],[2100,GROUND_Y-280,120],[2350,GROUND_Y-340,110],[2600,GROUND_Y-220,130],[2800,GROUND_Y-300,120]];
+    L.movingPlatforms = [[350,GROUND_Y-320,100,120,80],[1000,GROUND_Y-340,100,140,100],[1750,GROUND_Y-380,100,110,90],[2450,GROUND_Y-400,100,130,100]];
+    L.breakables = [[550,GROUND_Y-140,80],[1200,GROUND_Y-150,80],[1900,GROUND_Y-170,80]];
+    L.springs = [[700,GROUND_Y],[1500,GROUND_Y],[2300,GROUND_Y]];
+    L.spikes = [[300,GROUND_Y],[600,GROUND_Y],[1050,GROUND_Y],[1450,GROUND_Y],[1800,GROUND_Y],[2250,GROUND_Y]];
+    L.coins = [[100,GROUND_Y-40],[350,GROUND_Y-40],[580,GROUND_Y-40],[820,GROUND_Y-40],[1150,GROUND_Y-40],[1420,GROUND_Y-40],[1700,GROUND_Y-40],[2000,GROUND_Y-40],[2300,GROUND_Y-40],[260,GROUND_Y-160],[490,GROUND_Y-250],[740,GROUND_Y-190],[960,GROUND_Y-290],[1210,GROUND_Y-210],[1440,GROUND_Y-270],[1660,GROUND_Y-330],[1910,GROUND_Y-230],[2160,GROUND_Y-310],[2410,GROUND_Y-370],[2660,GROUND_Y-250],[2860,GROUND_Y-330],[410,GROUND_Y-360],[1060,GROUND_Y-380],[1810,GROUND_Y-420],[2510,GROUND_Y-440]];
+    L.enemies = [[350,GROUND_Y,80],[650,GROUND_Y,90],[1000,GROUND_Y,100],[1300,GROUND_Y,110],[1650,GROUND_Y,90],[2000,GROUND_Y,100],[2400,GROUND_Y,80],[2700,GROUND_Y,90]];
+    L.flyingEnemies = [[450,GROUND_Y-300,80],[900,GROUND_Y-320,90],[1550,GROUND_Y-340,80],[2200,GROUND_Y-360,90]];
+    L.boss = [2900, GROUND_Y];
+    L.powerups = [[490,GROUND_Y-280,"shield"],[1210,GROUND_Y-250,"speed"],[1910,GROUND_Y-260,"magnet"],[2600,GROUND_Y-260,"shield"]];
+    L.flagX = 3050;
+    L.mountains = [[50,220,[60,40,70]],[400,320,[50,30,60]],[900,260,[55,35,65]],[1400,340,[45,25,55]],[2000,280,[50,30,60]],[2600,300,[55,35,65]]];
+  }
+  return L;
+}
+
+// ════════════════════════════════════════════════════════
+// SHOW/HIDE TOUCH CONTROLS helper
+// ════════════════════════════════════════════════════════
+function showTouchControls(show) {
+  if (!isMobile) return;
+  const el = document.getElementById("touch-controls");
+  if (show) el.classList.add("active");
+  else el.classList.remove("active");
+}
+
+// ════════════════════════════════════════════════════════
+// LEVEL TRANSITION SCREEN
+// ════════════════════════════════════════════════════════
+scene("levelTransition", (level, score, lives) => {
+  showTouchControls(false);
+  const bgColors = { 1: [135, 206, 235], 2: [200, 160, 100], 3: [60, 40, 60] };
+  const bg = bgColors[level] || [135, 206, 235];
+  add([ rect(width(), height()), pos(0, 0), color(bg[0], bg[1], bg[2]) ]);
+
+  const titles = { 1: "LEVEL 1 — Green Hills", 2: "LEVEL 2 — Desert Canyon", 3: "LEVEL 3 — Dark Fortress" };
+  add([ text(titles[level] || `LEVEL ${level}`, { size: isMobile ? 36 : 48 }), pos(width()/2, height()/3), anchor("center"), color(255,255,255) ]);
+  add([ text(`Score: ${score}`, { size: isMobile ? 22 : 28 }), pos(width()/2, height()/2), anchor("center"), color(255,215,0) ]);
+  add([ text(`Lives: ${"❤️".repeat(lives)}`, { size: isMobile ? 22 : 28 }), pos(width()/2, height()/2 + 50), anchor("center"), color(255,255,255) ]);
+
+  let countdown = 3;
+  const countText = add([ text(`${countdown}`, { size: 80 }), pos(width()/2, height() - 140), anchor("center"), color(255,255,255) ]);
+  loop(1, () => { countdown--; countText.text = countdown > 0 ? `${countdown}` : "GO!"; });
+  wait(3.2, () => { currentLevel = level; go("game", level, score, lives); });
+});
+
+// ════════════════════════════════════════════════════════
+// START SCREEN
+// ════════════════════════════════════════════════════════
+scene("start", () => {
+  showTouchControls(false);
+  for (let i = 0; i < 6; i++) addCloud(rand(0, width()), rand(40, 200), rand(0.8, 1.5));
+
+  const ts = isMobile ? 38 : 56;
+  add([ text("SUPER PLATFORMER", { size: ts }), pos(width()/2 + 3, height()/5 + 3), anchor("center"), color(150, 20, 20), z(-1) ]);
+  add([ text("SUPER PLATFORMER", { size: ts }), pos(width()/2, height()/5), anchor("center"), color(220, 50, 50) ]);
+
+  add([ text("3 Levels  |  Power-ups  |  Boss Fight!", { size: isMobile ? 16 : 20 }), pos(width()/2, height()/5 + (isMobile ? 38 : 48)), anchor("center"), color(255,255,255) ]);
+
+  const cy = height() / 2 + (isMobile ? 0 : 10);
+  add([ text("CONTROLS", { size: isMobile ? 20 : 24 }), pos(width()/2, cy), anchor("center"), color(255,215,0) ]);
+
+  const controls = isMobile
+    ? ["Left / Right buttons to move", "Jump button to jump (tap twice for double jump!)", "Stomp enemies from above | Collect coins"]
+    : ["Arrow Keys / WASD — Move", "Space / Up / W — Jump (double jump!)", "Stomp enemies from above | Collect coins", "Grab power-ups: Speed (blue), Shield (green), Magnet (yellow)"];
+
+  controls.forEach((line, i) => {
+    add([ text(line, { size: isMobile ? 12 : 14 }), pos(width()/2, cy + 30 + i * (isMobile ? 20 : 24)), anchor("center"), color(255,255,255) ]);
+  });
+
+  if (highScore > 0) {
+    add([ text(`High Score: ${highScore}`, { size: 22 }), pos(width()/2, cy + 30 + controls.length * 24 + 20), anchor("center"), color(255,215,0) ]);
+  }
+
+  const promptMsg = isMobile ? "[ Tap to Play ]" : "[ Press ENTER to Play ]";
+  const prompt = add([ text(promptMsg, { size: isMobile ? 24 : 28 }), pos(width()/2, height() - (isMobile ? 60 : 80)), anchor("center"), color(255,255,255), opacity(1) ]);
+
+  let bt = 0;
+  onUpdate(() => { bt += dt(); prompt.opacity = Math.abs(Math.sin(bt * 2.5)); });
+
+  onKeyPress("enter", () => go("levelTransition", 1, 0, PLAYER_MAX_LIVES));
+  onKeyPress("space", () => go("levelTransition", 1, 0, PLAYER_MAX_LIVES));
+  onClick(() => go("levelTransition", 1, 0, PLAYER_MAX_LIVES));
+});
+
+// ════════════════════════════════════════════════════════
+// MAIN GAME SCENE
+// ════════════════════════════════════════════════════════
+scene("game", (level, startScore, startLives) => {
+  showTouchControls(true);
+  level = level || 1;
+  const L = getLevelData(level);
+
+  let score = startScore || 0;
+  let lives = startLives || PLAYER_MAX_LIVES;
+  let jumpsLeft = MAX_JUMPS;
+  let invincible = false;
+  let invTimer = 0;
+  let facingRight = true;
+  let combo = 0;
+  let comboTimer = 0;
+  let gameTime = 0;
+  let totalCoins = L.coins.length;
+  let coinsCollected = 0;
+  let speedBoost = false;
+  let speedTimer = 0;
+  let hasShield = false;
+  let magnetActive = false;
+  let magnetTimer = 0;
+  let shakeAmount = 0;
+  let shakeDuration = 0;
+
+  function doShake(amount, dur) { shakeAmount = amount; shakeDuration = dur; }
+
+  // Background
+  add([ rect(6000, 2000), pos(-500, -500), color(L.bgColor[0], L.bgColor[1], L.bgColor[2]), z(-100) ]);
+  L.mountains.forEach(([mx, mh, mc]) => addMountain(mx, mh, mc));
+  addWater(level);
+  for (let x = 0; x < 3200; x += rand(250, 450)) addCloud(x, rand(30, 180), rand(0.6, 1.3));
+
+  // Build level
+  L.ground.forEach(([sx, w]) => addPlatform(sx, GROUND_Y, w, 48));
+  L.platforms.forEach(([px, py, pw]) => addPlatform(px, py, pw, 24));
+  L.movingPlatforms.forEach(([px, py, pw, dist, spd]) => addMovingPlatform(px, py, pw, 20, dist, spd));
+  L.breakables.forEach(([bx, by, bw]) => addBreakablePlatform(bx, by, bw, 24));
+  L.springs.forEach(([sx, sy]) => addSpring(sx, sy));
+  L.spikes.forEach(([sx, sy]) => addSpike(sx, sy));
+  L.ground.forEach(([sx, w]) => { for (let gx = sx + 30; gx < sx + w - 30; gx += rand(60, 120)) addDecoGrass(gx, GROUND_Y); });
+  L.coins.forEach(([cx, cy]) => addCoin(cx, cy));
+  L.enemies.forEach(([ex, ey, ep]) => addEnemy(ex, ey, ep));
+  L.flyingEnemies.forEach(([fx, fy, fp]) => addFlyingEnemy(fx, fy, fp));
+  if (L.boss) addBoss(L.boss[0], L.boss[1]);
+  L.powerups.forEach(([px, py, pt]) => addPowerup(px, py, pt));
+
+  // Goal flag
+  add([ rect(6, 120), pos(L.flagX, GROUND_Y-120), color(200,200,200), outline(1, rgb(150,150,150)), area(), body({ isStatic: true }), anchor("bot"), z(2) ]);
+  add([ rect(40, 28), pos(L.flagX+4, GROUND_Y-230), color(255,50,50), outline(2, rgb(180,20,20)), z(2), "flagVisual" ]);
+  add([ rect(50, 120), pos(L.flagX-10, GROUND_Y-120), area(), opacity(0), "goal" ]);
+
+  // Player
+  const player = add([ rect(32, 44), color(220, 50, 50), area(), body(), anchor("bot"), pos(80, GROUND_Y - 10), opacity(1), "player", { scaleY: 1, squashTimer: 0 } ]);
+  const eyeL = add([ rect(6, 8), color(255,255,255), anchor("center"), pos(0,0), z(5) ]);
+  const eyeR = add([ rect(6, 8), color(255,255,255), anchor("center"), pos(0,0), z(5) ]);
+  const pupilL = add([ rect(4, 5), color(30,30,30), anchor("center"), pos(0,0), z(6) ]);
+  const pupilR = add([ rect(4, 5), color(30,30,30), anchor("center"), pos(0,0), z(6) ]);
+  const shieldVisual = add([ rect(42, 54, { radius: 8 }), anchor("bot"), pos(0,0), color(50, 220, 100), opacity(0), z(4) ]);
+
+  // Movement
+  const getSpeed = () => speedBoost ? MOVE_SPEED * 1.6 : MOVE_SPEED;
+
+  onKeyDown("right", () => { player.move(getSpeed(), 0); facingRight = true; });
+  onKeyDown("left",  () => { player.move(-getSpeed(), 0); facingRight = false; });
+  onKeyDown("d",     () => { player.move(getSpeed(), 0); facingRight = true; });
+  onKeyDown("a",     () => { player.move(-getSpeed(), 0); facingRight = false; });
+
+  function doJump() {
+    if (jumpsLeft > 0) {
+      player.jump(JUMP_FORCE);
+      jumpsLeft--;
+      player.squashTimer = 0.15;
+      player.scaleY = 1.2;
+      playSound("jump");
+    }
+  }
+
+  onKeyPress("space", doJump);
+  onKeyPress("up", doJump);
+  onKeyPress("w", doJump);
+
+  // Touch jump handling (consume the flag each frame)
+  onUpdate(() => {
+    if (touchState.jumpPressed) {
+      touchState.jumpPressed = false;
+      doJump();
+    }
+  });
+
+  player.onGround(() => {
+    jumpsLeft = MAX_JUMPS;
+    player.squashTimer = 0.1;
+    player.scaleY = 0.8;
+    if (comboTimer <= 0) combo = 0;
+  });
+
+  // Breakable
+  player.onCollide("breakable", (b) => { if (b.breakTimer < 0) { b.breakTimer = 0.5; b.color = rgb(220, 170, 100); } });
+  onUpdate("breakable", (b) => {
+    if (b.breakTimer >= 0) {
+      b.breakTimer -= dt();
+      b.pos.x += rand(-1, 1);
+      if (b.breakTimer <= 0) { playSound("break"); spawnBreakParticles(b.pos.x, b.pos.y, b.width || 80); destroy(b); }
+    }
+  });
+
+  // Springs
+  player.onCollide("spring", () => { player.jump(JUMP_FORCE * 1.6); jumpsLeft = MAX_JUMPS; playSound("spring"); doShake(3, 0.15); });
+
+  // Spikes
+  player.onCollide("spike", () => {
+    if (!invincible) {
+      if (hasShield) { hasShield = false; invincible = true; invTimer = 0.5; playSound("hurt"); doShake(4, 0.2); }
+      else {
+        lives--; playSound("hurt"); doShake(6, 0.3);
+        if (lives <= 0) { spawnDeathParticles(player.pos); playSound("death"); go("gameover", score); return; }
+        invincible = true; invTimer = INVINCIBLE_TIME; player.jump(JUMP_FORCE * 0.5);
+      }
+    }
+  });
+
+  // Entity updates
+  onUpdate("movingPlatform", (p) => { p.pos.x += p.speed * p.dir * dt(); if (p.pos.x > p.startX + p.distX) p.dir = -1; else if (p.pos.x < p.startX - p.distX) p.dir = 1; });
+  onUpdate("groundEnemy", (e) => { e.pos.x += e.speed * e.dir * dt(); if (e.pos.x > e.startX + e.patrolDist) e.dir = -1; else if (e.pos.x < e.startX - e.patrolDist) e.dir = 1; });
+  onUpdate("flyingEnemy", (e) => { e.bobTime += dt(); e.pos.x += e.speed * e.dir * dt(); e.pos.y = e.startY + Math.sin(e.bobTime * 2) * 40; if (e.pos.x > e.startX + e.patrolDist) e.dir = -1; else if (e.pos.x < e.startX - e.patrolDist) e.dir = 1; });
+  onUpdate("boss", (b) => { b.pos.x += b.speed * b.dir * dt(); if (b.pos.x > b.startX + b.patrolDist) b.dir = -1; else if (b.pos.x < b.startX - b.patrolDist) b.dir = 1; });
+  onUpdate("coin", (c) => { c.pos.y += Math.sin((gameTime + c.bobOffset) * 3) * 0.3; });
+  onUpdate("powerup", (p) => { p.pos.y += Math.sin((gameTime + p.bobOffset) * 2.5) * 0.4; });
+  onUpdate("cloud", (c) => { c.pos.x += c.speed * dt(); });
+  onUpdate("water", (w) => { w.pos.y = w.startY + Math.sin(gameTime * 2 + w.bobOff) * 4; });
+
+  // Coin collection
+  player.onCollide("coin", (c) => { spawnCoinParticles(c.pos); destroy(c); coinsCollected++; score += 10; playSound("coin"); updateHUD(); });
+
+  // Power-up collection
+  player.onCollide("powerup", (p) => {
+    const t = p.ptype;
+    spawnPowerupParticles(p.pos, t === "speed" ? [50,150,255] : t === "shield" ? [50,220,100] : [255,220,50]);
+    destroy(p); playSound("powerup");
+    if (t === "speed") { speedBoost = true; speedTimer = POWERUP_DURATION; showPowerupText("SPEED BOOST!"); }
+    else if (t === "shield") { hasShield = true; showPowerupText("SHIELD!"); }
+    else if (t === "magnet") { magnetActive = true; magnetTimer = POWERUP_DURATION; showPowerupText("COIN MAGNET!"); }
+  });
+
+  function showPowerupText(msg) {
+    add([ text(msg, { size: 22 }), pos(player.pos.x, player.pos.y - 70), anchor("center"), color(255, 255, 100), opacity(1), lifespan(1.2, { fade: 0.5 }), z(50) ]);
+  }
+
+  // Enemy collision
+  player.onCollide("enemy", (e) => {
+    const isBoss = e.is("boss");
+    const enemyH = isBoss ? 64 : 32;
+    const playerBottom = player.pos.y;
+    const enemyTop = e.is("flyingEnemy") ? e.pos.y - 14 : e.pos.y - enemyH;
+
+    if (playerBottom <= enemyTop + 18 && player.vel && player.vel.y > 0) {
+      if (isBoss) {
+        e.hp--; doShake(8, 0.3);
+        if (e.hp <= 0) { spawnEnemyDeathParticles(e.pos, [120,20,20]); destroy(e); score += 100; playSound("stomp"); }
+        else { e.color = rgb(255, 100, 100); wait(0.15, () => { if (e.exists()) e.color = rgb(120, 20, 20); }); playSound("stomp"); score += 25; }
+      } else {
+        const ec = e.is("flyingEnemy") ? [200,80,40] : [180,40,180];
+        spawnEnemyDeathParticles(e.pos, ec); destroy(e); score += 25; playSound("stomp");
+      }
+      combo++; comboTimer = 0.8;
+      if (combo > 1) { const bp = combo * 15; score += bp; add([ text(`COMBO x${combo}! +${bp}`, { size: 20 }), pos(player.pos.x, player.pos.y - 70), anchor("center"), color(255,100,100), opacity(1), lifespan(1, { fade: 0.4 }), z(50) ]); }
+      doShake(5, 0.2); player.jump(JUMP_FORCE * 0.6); jumpsLeft = MAX_JUMPS; updateHUD();
+    } else if (!invincible) {
+      if (hasShield) {
+        hasShield = false; invincible = true; invTimer = 1; playSound("hurt"); doShake(4, 0.2);
+        const kd = player.pos.x < e.pos.x ? -1 : 1; player.jump(JUMP_FORCE * 0.4); player.move(kd * 200, 0);
+      } else {
+        lives--; playSound("hurt"); doShake(6, 0.3);
+        if (lives <= 0) { spawnDeathParticles(player.pos); playSound("death"); go("gameover", score); return; }
+        invincible = true; invTimer = INVINCIBLE_TIME;
+        const kd = player.pos.x < e.pos.x ? -1 : 1; player.jump(JUMP_FORCE * 0.5); player.move(kd * 300, 0);
+      }
+      updateHUD();
+    }
+  });
+
+  // Goal
+  player.onCollide("goal", () => {
+    playSound("win");
+    if (score > highScore) highScore = score;
+    if (level < 3) go("levelTransition", level + 1, score, lives);
+    else go("win", score);
+  });
+
+  // Main update
+  onUpdate(() => {
+    gameTime += dt();
+
+    // Touch movement
+    if (touchState.left) { player.move(-getSpeed(), 0); facingRight = false; }
+    if (touchState.right) { player.move(getSpeed(), 0); facingRight = true; }
+
+    // Camera + shake
+    let cx = player.pos.x, cy = height() / 2;
+    if (shakeDuration > 0) { shakeDuration -= dt(); cx += rand(-shakeAmount, shakeAmount); cy += rand(-shakeAmount, shakeAmount); }
+    camPos(cx, cy);
+
+    // Eyes
+    const eyeOX = facingRight ? 6 : -6, pupilE = facingRight ? 2 : -2;
+    eyeL.pos = vec2(player.pos.x - 6 + eyeOX, player.pos.y - 34);
+    eyeR.pos = vec2(player.pos.x + 6 + eyeOX, player.pos.y - 34);
+    pupilL.pos = vec2(eyeL.pos.x + pupilE, eyeL.pos.y + 1);
+    pupilR.pos = vec2(eyeR.pos.x + pupilE, eyeR.pos.y + 1);
+
+    // Shield visual
+    shieldVisual.pos = vec2(player.pos.x, player.pos.y);
+    shieldVisual.opacity = hasShield ? 0.25 + Math.sin(gameTime * 4) * 0.1 : 0;
+
+    // Invincibility
+    if (invincible) { invTimer -= dt(); player.opacity = Math.sin(invTimer * 15) > 0 ? 1 : 0.3; if (invTimer <= 0) { invincible = false; player.opacity = 1; } }
+
+    // Squash/stretch
+    if (player.squashTimer > 0) player.squashTimer -= dt();
+    else player.scaleY = lerp(player.scaleY, 1, 0.15);
+
+    // Combo
+    if (comboTimer > 0) { comboTimer -= dt(); if (comboTimer <= 0) combo = 0; }
+
+    // Powerup timers
+    if (speedBoost) { speedTimer -= dt(); if (speedTimer <= 0) speedBoost = false; }
+    if (magnetActive) {
+      magnetTimer -= dt(); if (magnetTimer <= 0) magnetActive = false;
+      get("coin").forEach((c) => { const d = player.pos.dist(c.pos); if (d < 200) { const dir = player.pos.sub(c.pos).unit(); c.pos.x += dir.x * 300 * dt(); c.pos.y += dir.y * 300 * dt(); } });
+    }
+
+    // Fall death
+    if (player.pos.y > FALL_DEATH_Y) {
+      lives--; playSound("hurt");
+      if (lives <= 0) { playSound("death"); go("gameover", score); }
+      else { player.pos = vec2(80, GROUND_Y - 10); player.vel = vec2(0, 0); invincible = true; invTimer = INVINCIBLE_TIME; updateHUD(); }
+    }
+
+    timerText.text = formatTime(gameTime);
+    let pStr = "";
+    if (speedBoost) pStr += `SPD ${Math.ceil(speedTimer)}s  `;
+    if (hasShield)  pStr += "SHIELD  ";
+    if (magnetActive) pStr += `MAG ${Math.ceil(magnetTimer)}s`;
+    powerupText.text = pStr;
+  });
+
+  // HUD
+  function formatTime(t) {
+    const m = Math.floor(t / 60), s = Math.floor(t % 60), ms = Math.floor((t % 1) * 100);
+    return `${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}.${String(ms).padStart(2,"0")}`;
+  }
+  const hudSize = isMobile ? 16 : 22;
+  const hudSmall = isMobile ? 13 : 18;
+  const scoreText = add([ text(`Score: ${score}`, { size: hudSize }), pos(20, 16), fixed(), color(255,255,255), z(100) ]);
+  const livesText = add([ text(`Lives: ${"❤️".repeat(lives)}${"🖤".repeat(PLAYER_MAX_LIVES - lives)}`, { size: hudSize }), pos(20, 16 + hudSize + 4), fixed(), color(255,255,255), z(100) ]);
+  const coinCountText = add([ text(`Coins: ${coinsCollected}/${totalCoins}`, { size: hudSmall }), pos(20, 16 + (hudSize + 4) * 2), fixed(), color(255,215,0), z(100) ]);
+  const timerText = add([ text("00:00.00", { size: hudSmall }), pos(width()-20, 16), fixed(), anchor("topright"), color(255,255,255), opacity(0.8), z(100) ]);
+  const levelText = add([ text(`Level ${level}`, { size: hudSmall }), pos(width()-20, 16 + hudSmall + 4), fixed(), anchor("topright"), color(255,215,0), opacity(0.8), z(100) ]);
+  const powerupText = add([ text("", { size: isMobile ? 12 : 16 }), pos(20, 16 + (hudSize + 4) * 2 + hudSmall + 6), fixed(), color(100,220,255), z(100) ]);
+
+  function updateHUD() {
+    scoreText.text = `Score: ${score}`;
+    livesText.text = `Lives: ${"❤️".repeat(Math.max(0, lives))}${"🖤".repeat(Math.max(0, PLAYER_MAX_LIVES - lives))}`;
+    coinCountText.text = `Coins: ${coinsCollected}/${totalCoins}`;
+  }
+});
+
+// ════════════════════════════════════════════════════════
+// WIN SCREEN
+// ════════════════════════════════════════════════════════
+scene("win", (finalScore) => {
+  showTouchControls(false);
+  if (finalScore > highScore) highScore = finalScore;
+  loop(0.3, () => { const x = rand(0, width()), y = rand(0, height()); for (let i = 0; i < 6; i++) add([ rect(8, 8), pos(x, y), anchor("center"), color(rand(100,255), rand(100,255), rand(0,255)), opacity(1), move(rand(0,360), rand(40,180)), lifespan(1.2, { fade: 0.5 }) ]); });
+  add([ text("CONGRATULATIONS!", { size: isMobile ? 36 : 52 }), pos(width()/2, height()/4), anchor("center"), color(255,215,0) ]);
+  add([ text("You conquered all 3 levels!", { size: isMobile ? 18 : 24 }), pos(width()/2, height()/4 + 52), anchor("center"), color(255,255,255) ]);
+  add([ text(`Final Score: ${finalScore}`, { size: isMobile ? 28 : 36 }), pos(width()/2, height()/2), anchor("center"), color(255,255,255) ]);
+  if (finalScore >= highScore && highScore > 0) add([ text("NEW HIGH SCORE!", { size: isMobile ? 22 : 28 }), pos(width()/2, height()/2 + 50), anchor("center"), color(255,100,100) ]);
+  const promptMsg = isMobile ? "[ Tap to play again ]" : "[ Press ENTER to play again ]";
+  const prompt = add([ text(promptMsg, { size: 24 }), pos(width()/2, height() - 90), anchor("center"), color(255,255,255), opacity(1) ]);
+  let bt = 0;
+  onUpdate(() => { bt += dt(); prompt.opacity = Math.abs(Math.sin(bt * 2.5)); });
+  onKeyPress("enter", () => go("start"));
+  onKeyPress("space", () => go("start"));
+  onClick(() => go("start"));
+});
+
+// ════════════════════════════════════════════════════════
+// GAME OVER SCREEN
+// ════════════════════════════════════════════════════════
+scene("gameover", (finalScore) => {
+  showTouchControls(false);
+  if (finalScore > highScore) highScore = finalScore;
+  add([ text("GAME OVER", { size: isMobile ? 48 : 64 }), pos(width()/2 + 3, height()/3 + 3), anchor("center"), color(100,20,20), z(-1) ]);
+  add([ text("GAME OVER", { size: isMobile ? 48 : 64 }), pos(width()/2, height()/3), anchor("center"), color(220,50,50) ]);
+  add([ text(`Score: ${finalScore}`, { size: isMobile ? 24 : 32 }), pos(width()/2, height()/2), anchor("center"), color(255,255,255) ]);
+  add([ text(`High Score: ${highScore}`, { size: isMobile ? 20 : 24 }), pos(width()/2, height()/2 + 50), anchor("center"), color(255,215,0) ]);
+  add([ text(`Reached: Level ${currentLevel}`, { size: isMobile ? 16 : 20 }), pos(width()/2, height()/2 + 85), anchor("center"), color(200,200,200) ]);
+  const promptMsg = isMobile ? "[ Tap to retry ]" : "[ Press ENTER to retry ]";
+  const prompt = add([ text(promptMsg, { size: 24 }), pos(width()/2, height() - 90), anchor("center"), color(255,255,255), opacity(1) ]);
+  let bt = 0;
+  onUpdate(() => { bt += dt(); prompt.opacity = Math.abs(Math.sin(bt * 2.5)); });
+  onKeyPress("enter", () => go("start"));
+  onKeyPress("space", () => go("start"));
+  onClick(() => go("start"));
+});
+
+// ════════════════════════════════════════════════════════
+// START!
+// ════════════════════════════════════════════════════════
+go("start");
+  </script>
+
+  <!-- Service Worker for offline/PWA support -->
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    }
+  </script>
+</body>
+</html>

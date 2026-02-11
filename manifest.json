@@ -1,0 +1,25 @@
+{
+  "name": "Super Platformer",
+  "short_name": "Platformer",
+  "description": "A fun platformer game with 3 levels, power-ups, enemies, and a boss fight!",
+  "start_url": "/index.html",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#87CEEB",
+  "theme_color": "#87CEEB",
+  "categories": ["games", "entertainment"],
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
